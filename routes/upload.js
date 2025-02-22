@@ -10,53 +10,44 @@ const generateUniqueId = require('../utils/generateId');
 const router = express.Router();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Configure Cloudinary
+// ✅ Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Configure Multer (Memory Storage)
+// ✅ Configure Multer (Memory Storage)
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// Google Sheets Credentials
+// ✅ Google Sheets Authentication
 const SERVICE_ACCOUNT = {
-  client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+  client_email: process.env.GOOGLE_SERVICE_EMAIL,
+  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'), // Fixes escaped newlines
 };
 
-// Google Sheets Setup
-const SHEET_ID = process.env.GOOGLE_SHEET_ID;
+const SHEET_ID = process.env.GOOGLE_SHEETS_ID;
 const doc = new GoogleSpreadsheet(SHEET_ID);
-
-// Authenticate before loading document
 const auth = new JWT({
   email: SERVICE_ACCOUNT.client_email,
   key: SERVICE_ACCOUNT.private_key,
   scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
 
-// Function to load the sheet
-async function loadSheet() {
-  await doc.useAuth(auth);  // Replaces `useServiceAccountAuth`
-  await doc.loadInfo();
-}
-
-// Handle file upload
+// ✅ File Upload Route
 router.post('/', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const uploaderName = req.body.uploaderName;
+    const uploaderName = req.body.uploaderName || "Unknown";
     const trackerId = generateUniqueId();
     const uploadDate = new Date().toISOString();
     const imageBase64 = req.file.buffer.toString('base64');
 
-    // Upload image to Cloudinary
+    // ✅ Upload Image to Cloudinary
     cloudinary.uploader.upload_stream(
       { resource_type: "image" },
       async (error, cloudinaryResult) => {
@@ -67,40 +58,43 @@ router.post('/', upload.single('file'), async (req, res) => {
 
         const fileUrl = cloudinaryResult.secure_url;
 
-        // Send Cloudinary URL response immediately
+        // ✅ Send Cloudinary URL response immediately
         res.json({
           success: true,
           message: "File uploaded successfully",
           downloadLink: fileUrl
         });
 
-        // Process AI analysis & Google Sheets update in the background
+        // ✅ Perform AI Analysis and Google Sheets Update in the Background
         try {
-          const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+          const model = genAI.getGenerativeModel({ model: "gemini-1.0-pro" });
           const prompt = `
-            Analyze the provided image and give the following details:
-            Name: Image name based on its content.
-            Artist: If unknown, write "Unknown".
-            AI Identification Score: Score out of 100 (High for AI-generated) and confidence level.
-            Originality Score: Score out of 100 (High for original) and confidence level.
-            Conclusion: AI-generated or original.
-            Description: A brief description of the image content.
+            Analyze the provided image and provide:
+            - Name: Image name based on content.
+            - Artist: If unknown, write "Unknown".
+            - AI Identification Score: Score out of 100 (Higher means more AI-generated).
+            - Originality Score: Score out of 100 (Higher means more original).
+            - Conclusion: "AI-generated" or "Original".
+            - Description: A brief description of the image content.
           `;
 
           const aiResponse = await model.generateContent([
             prompt,
             { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
           ]);
+          
           const analysisText = aiResponse.response.text();
 
-          // Save data to Google Sheets
-          await loadSheet();
+          // ✅ Save Data to Google Sheets
+          await doc.useServiceAccountAuth(auth);
+          await doc.loadInfo();
           const sheet = doc.sheetsByIndex[0];
           await sheet.addRow({
             Date: uploadDate,
             File_URL: fileUrl,
             Tracker_ID: trackerId,
             Uploader: uploaderName,
+            Analysis: analysisText,
           });
 
           console.log("✔ AI Analysis and Google Sheets Update Completed");
