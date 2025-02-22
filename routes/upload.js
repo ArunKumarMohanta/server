@@ -24,7 +24,7 @@ const upload = multer({ storage });
 // Google Sheets Credentials
 const SERVICE_ACCOUNT = {
   client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'), // Fix new lines
+  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
 };
 
 // Google Sheets Setup
@@ -46,8 +46,6 @@ router.post('/', upload.single('file'), async (req, res) => {
     const uploaderName = req.body.uploaderName;
     const trackerId = generateUniqueId();
     const uploadDate = new Date().toISOString();
-
-    // Convert buffer to Base64
     const imageBase64 = req.file.buffer.toString('base64');
 
     // Upload image to Cloudinary
@@ -61,19 +59,26 @@ router.post('/', upload.single('file'), async (req, res) => {
 
         const fileUrl = cloudinaryResult.secure_url;
 
-        // AI Analysis with Gemini (Use Base64 instead of URL)
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-        const prompt = `
-          Analyze the provided image and give the following details:
-          Name: Image name based on its content.
-          Artist: If unknown, write "Unknown".
-          AI Identification Score: Score out of 100 (High for AI-generated) and confidence level.
-          Originality Score: Score out of 100 (High for original) and confidence level.
-          Conclusion: AI-generated or original.
-          Description: A brief description of the image content.
-        `;
+        // Send Cloudinary URL response immediately
+        res.json({
+          success: true,
+          message: "File uploaded successfully",
+          downloadLink: fileUrl
+        });
 
+        // Process AI analysis & Google Sheets update in the background
         try {
+          const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+          const prompt = `
+            Analyze the provided image and give the following details:
+            Name: Image name based on its content.
+            Artist: If unknown, write "Unknown".
+            AI Identification Score: Score out of 100 (High for AI-generated) and confidence level.
+            Originality Score: Score out of 100 (High for original) and confidence level.
+            Conclusion: AI-generated or original.
+            Description: A brief description of the image content.
+          `;
+
           const aiResponse = await model.generateContent([
             prompt,
             { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
@@ -91,16 +96,9 @@ router.post('/', upload.single('file'), async (req, res) => {
             Uploader: uploaderName,
           });
 
-          // Response
-          res.json({
-            success: true,
-            message: 'File uploaded and analyzed successfully!',
-            downloadLink: fileUrl,
-            aiAnalysis: analysisText,
-          });
+          console.log("✔ AI Analysis and Google Sheets Update Completed");
         } catch (aiError) {
-          console.error('AI Analysis Error:', aiError);
-          return res.status(500).json({ error: 'AI analysis failed' });
+          console.error('❌ AI Analysis Error:', aiError);
         }
       }
     ).end(req.file.buffer);
