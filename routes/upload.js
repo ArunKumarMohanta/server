@@ -1,88 +1,68 @@
-require('dotenv').config();
-const express = require('express');
-const multer = require('multer');
-const { v2: cloudinary } = require('cloudinary');
-const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT } = require('google-auth-library');
-const generateUniqueId = require('../utils/generateId');
+require("dotenv").config();
+const express = require("express");
+const multer = require("multer");
+const { google } = require("googleapis");
+const { GoogleSpreadsheet } = require("google-spreadsheet");
+const path = require("path");
+const fs = require("fs");
 
-const router = express.Router();
+const app = express();
+const port = 3000;
 
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+// Load Google Service Account Credentials
+const SERVICE_ACCOUNT = JSON.parse(fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, "utf8"));
+
+// Authenticate with Google Sheets
+const auth = new google.auth.GoogleAuth({
+  credentials: SERVICE_ACCOUNT,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
-
-// Configure Multer (Memory Storage)
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
-
-// Google Sheets Credentials
-const SERVICE_ACCOUNT = {
-  client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-};
 
 // Google Sheets Setup
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const doc = new GoogleSpreadsheet(SHEET_ID);
 
-// Handle file upload
-router.post('/', upload.single('file'), async (req, res) => {
+// Multer Setup for File Uploads
+const storage = multer.diskStorage({
+  destination: "./uploads/",
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+const upload = multer({ storage });
+
+// File Upload Route
+app.post("/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+      return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const uploaderName = req.body.uploaderName;
-    const trackerId = generateUniqueId();
-    const uploadDate = new Date().toISOString();
+    const { uploader } = req.body;
+    const fileUrl = `http://localhost:${port}/uploads/${req.file.filename}`;
+    const trackerId = Math.random().toString(36).substring(2, 9).toUpperCase();
+    const date = new Date().toISOString();
 
-    // Upload image to Cloudinary
-    cloudinary.uploader.upload_stream(
-      { resource_type: "image" },
-      async (error, cloudinaryResult) => {
-        if (error) {
-          console.error('Cloudinary Upload Error:', error);
-          return res.status(500).json({ error: 'Cloudinary upload failed' });
-        }
+    // Authenticate and Load Google Sheet
+    await doc.useServiceAccountAuth(SERVICE_ACCOUNT);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
 
-        const fileUrl = cloudinaryResult.secure_url;
+    // Append Data to Google Sheets
+    await sheet.addRow({
+      Date: date,
+      File_URL: fileUrl,
+      Tracker_ID: trackerId,
+      Uploader: uploader || "Anonymous",
+    });
 
-        // Send Cloudinary URL response immediately
-        res.json({
-          success: true,
-          message: "File uploaded successfully",
-          downloadLink: fileUrl
-        });
-
-        // Save data to Google Sheets in the background
-        try {
-          // Authenticate Google Sheets using JWT
-          await doc.useServiceAccountAuth(SERVICE_ACCOUNT);
-          await doc.loadInfo(); // Load spreadsheet info
-          
-          const sheet = doc.sheetsByIndex[0]; // Get first sheet
-          await sheet.addRow({
-            Date: uploadDate,
-            File_URL: fileUrl,
-            Tracker_ID: trackerId,
-            Uploader: uploaderName,
-          });
-
-          console.log("✔ Google Sheets Update Completed");
-        } catch (sheetError) {
-          console.error('❌ Google Sheets Update Error:', sheetError);
-        }
-      }
-    ).end(req.file.buffer);
-
+    res.json({ message: "File uploaded successfully", fileUrl, trackerId });
   } catch (error) {
-    console.error('Error in upload:', error);
-    res.status(500).json({ error: 'Upload failed' });
+    console.error("Error uploading file:", error);
+    res.status(500).json({ message: "Internal Server Error", error: error.message });
   }
 });
 
-module.exports = router;
+app.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
+});
