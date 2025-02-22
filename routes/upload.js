@@ -2,13 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
 const { JWT } = require('google-auth-library');
 const generateUniqueId = require('../utils/generateId');
 
 const router = express.Router();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 // Configure Cloudinary
 cloudinary.config({
@@ -46,7 +44,6 @@ router.post('/', upload.single('file'), async (req, res) => {
     const uploaderName = req.body.uploaderName;
     const trackerId = generateUniqueId();
     const uploadDate = new Date().toISOString();
-    const imageBase64 = req.file.buffer.toString('base64');
 
     // Upload image to Cloudinary
     cloudinary.uploader.upload_stream(
@@ -66,26 +63,8 @@ router.post('/', upload.single('file'), async (req, res) => {
           downloadLink: fileUrl
         });
 
-        // Process AI analysis & Google Sheets update in the background
+        // Save data to Google Sheets in the background
         try {
-          const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-          const prompt = `
-            Analyze the provided image and give the following details:
-            Name: Image name based on its content.
-            Artist: If unknown, write "Unknown".
-            AI Identification Score: Score out of 100 (High for AI-generated) and confidence level.
-            Originality Score: Score out of 100 (High for original) and confidence level.
-            Conclusion: AI-generated or original.
-            Description: A brief description of the image content.
-          `;
-
-          const aiResponse = await model.generateContent([
-            prompt,
-            { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
-          ]);
-          const analysisText = aiResponse.response.text();
-
-          // Save data to Google Sheets
           await doc.useServiceAccountAuth(auth);
           await doc.loadInfo();
           const sheet = doc.sheetsByIndex[0];
@@ -96,9 +75,9 @@ router.post('/', upload.single('file'), async (req, res) => {
             Uploader: uploaderName,
           });
 
-          console.log("✔ AI Analysis and Google Sheets Update Completed");
-        } catch (aiError) {
-          console.error('❌ AI Analysis Error:', aiError);
+          console.log("✔ Google Sheets Update Completed");
+        } catch (sheetError) {
+          console.error('❌ Google Sheets Update Error:', sheetError);
         }
       }
     ).end(req.file.buffer);
