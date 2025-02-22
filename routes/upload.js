@@ -1,68 +1,119 @@
-require("dotenv").config();
-const express = require("express");
-const multer = require("multer");
-const { google } = require("googleapis");
-const { GoogleSpreadsheet } = require("google-spreadsheet");
-const path = require("path");
-const fs = require("fs");
+require('dotenv').config();
+const express = require('express');
+const multer = require('multer');
+const { v2: cloudinary } = require('cloudinary');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { GoogleSpreadsheet } = require('google-spreadsheet');
+const { JWT } = require('google-auth-library');
+const generateUniqueId = require('../utils/generateId');
 
-const app = express();
-const port = 3000;
+const router = express.Router();
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Load Google Service Account Credentials
-const SERVICE_ACCOUNT = JSON.parse(fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, "utf8"));
-
-// Authenticate with Google Sheets
-const auth = new google.auth.GoogleAuth({
-  credentials: SERVICE_ACCOUNT,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+// Configure Multer (Memory Storage)
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+// Google Sheets Credentials
+const SERVICE_ACCOUNT = {
+  client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+};
 
 // Google Sheets Setup
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const doc = new GoogleSpreadsheet(SHEET_ID);
 
-// Multer Setup for File Uploads
-const storage = multer.diskStorage({
-  destination: "./uploads/",
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
-  },
+// Authenticate before loading document
+const auth = new JWT({
+  email: SERVICE_ACCOUNT.client_email,
+  key: SERVICE_ACCOUNT.private_key,
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
 });
-const upload = multer({ storage });
 
-// File Upload Route
-app.post("/upload", upload.single("file"), async (req, res) => {
+// Function to load the sheet
+async function loadSheet() {
+  await doc.useAuth(auth);  // Replaces `useServiceAccountAuth`
+  await doc.loadInfo();
+}
+
+// Handle file upload
+router.post('/', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ message: "No file uploaded" });
+      return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const { uploader } = req.body;
-    const fileUrl = `http://localhost:${port}/uploads/${req.file.filename}`;
-    const trackerId = Math.random().toString(36).substring(2, 9).toUpperCase();
-    const date = new Date().toISOString();
+    const uploaderName = req.body.uploaderName;
+    const trackerId = generateUniqueId();
+    const uploadDate = new Date().toISOString();
+    const imageBase64 = req.file.buffer.toString('base64');
 
-    // Authenticate and Load Google Sheet
-    await doc.useServiceAccountAuth(SERVICE_ACCOUNT);
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
+    // Upload image to Cloudinary
+    cloudinary.uploader.upload_stream(
+      { resource_type: "image" },
+      async (error, cloudinaryResult) => {
+        if (error) {
+          console.error('Cloudinary Upload Error:', error);
+          return res.status(500).json({ error: 'Cloudinary upload failed' });
+        }
 
-    // Append Data to Google Sheets
-    await sheet.addRow({
-      Date: date,
-      File_URL: fileUrl,
-      Tracker_ID: trackerId,
-      Uploader: uploader || "Anonymous",
-    });
+        const fileUrl = cloudinaryResult.secure_url;
 
-    res.json({ message: "File uploaded successfully", fileUrl, trackerId });
+        // Send Cloudinary URL response immediately
+        res.json({
+          success: true,
+          message: "File uploaded successfully",
+          downloadLink: fileUrl
+        });
+
+        // Process AI analysis & Google Sheets update in the background
+        try {
+          const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+          const prompt = `
+            Analyze the provided image and give the following details:
+            Name: Image name based on its content.
+            Artist: If unknown, write "Unknown".
+            AI Identification Score: Score out of 100 (High for AI-generated) and confidence level.
+            Originality Score: Score out of 100 (High for original) and confidence level.
+            Conclusion: AI-generated or original.
+            Description: A brief description of the image content.
+          `;
+
+          const aiResponse = await model.generateContent([
+            prompt,
+            { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
+          ]);
+          const analysisText = aiResponse.response.text();
+
+          // Save data to Google Sheets
+          await loadSheet();
+          const sheet = doc.sheetsByIndex[0];
+          await sheet.addRow({
+            Date: uploadDate,
+            File_URL: fileUrl,
+            Tracker_ID: trackerId,
+            Uploader: uploaderName,
+          });
+
+          console.log("✔ AI Analysis and Google Sheets Update Completed");
+        } catch (aiError) {
+          console.error('❌ AI Analysis Error:', aiError);
+        }
+      }
+    ).end(req.file.buffer);
+
   } catch (error) {
-    console.error("Error uploading file:", error);
-    res.status(500).json({ message: "Internal Server Error", error: error.message });
+    console.error('Error in upload:', error);
+    res.status(500).json({ error: 'Upload failed' });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-});
+module.exports = router;
