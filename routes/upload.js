@@ -28,11 +28,6 @@ const SERVICE_ACCOUNT = {
 // Google Sheets Setup
 const SHEET_ID = process.env.GOOGLE_SHEET_ID;
 const doc = new GoogleSpreadsheet(SHEET_ID);
-const auth = new JWT({
-  email: SERVICE_ACCOUNT.client_email,
-  key: SERVICE_ACCOUNT.private_key,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
 
 // Handle file upload
 router.post('/', upload.single('file'), async (req, res) => {
@@ -65,9 +60,11 @@ router.post('/', upload.single('file'), async (req, res) => {
 
         // Save data to Google Sheets in the background
         try {
-          await doc.useServiceAccountAuth(auth);
-          await doc.loadInfo();
-          const sheet = doc.sheetsByIndex[0];
+          // Authenticate Google Sheets using JWT
+          await doc.useServiceAccountAuth(SERVICE_ACCOUNT);
+          await doc.loadInfo(); // Load spreadsheet info
+          
+          const sheet = doc.sheetsByIndex[0]; // Get first sheet
           await sheet.addRow({
             Date: uploadDate,
             File_URL: fileUrl,
