@@ -10,7 +10,8 @@ const app = express();
 const PORT = process.env.PORT || 3001; // Use Render's port if available
 
 // CORS setup (allow requests from frontend hosted on GitHub Pages)
-app.use(cors({ origin: 'https://arunkumarmohanta.github.io/frontend' })); // Change '*' to your GitHub Pages URL for better security
+app.use(cors());
+app.options('*', cors()); // Allows preflight requests globally
 
 app.use(bodyParser.json({ limit: '10mb' }));
 
