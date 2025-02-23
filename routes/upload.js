@@ -4,38 +4,32 @@ const multer = require('multer');
 const { v2: cloudinary } = require('cloudinary');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { GoogleSpreadsheet } = require('google-spreadsheet');
-const { JWT } = require('google-auth-library');
 const generateUniqueId = require('../utils/generateId');
 
 const router = express.Router();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// ✅ Configure Cloudinary
+// Configure Cloudinary
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// ✅ Configure Multer (Memory Storage)
+// Configure Multer (Memory Storage)
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// ✅ Google Sheets Authentication
+// Google Sheets Credentials (from .env)
 const SERVICE_ACCOUNT = {
   client_email: process.env.GOOGLE_SERVICE_EMAIL,
-  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'), // Fixes escaped newlines
+  private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
 };
 
 const SHEET_ID = process.env.GOOGLE_SHEETS_ID;
 const doc = new GoogleSpreadsheet(SHEET_ID);
-const auth = new JWT({
-  email: SERVICE_ACCOUNT.client_email,
-  key: SERVICE_ACCOUNT.private_key,
-  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-});
 
-// ✅ File Upload Route
+// Handle file upload
 router.post('/', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -47,7 +41,7 @@ router.post('/', upload.single('file'), async (req, res) => {
     const uploadDate = new Date().toISOString();
     const imageBase64 = req.file.buffer.toString('base64');
 
-    // ✅ Upload Image to Cloudinary
+    // Upload image to Cloudinary
     cloudinary.uploader.upload_stream(
       { resource_type: "image" },
       async (error, cloudinaryResult) => {
@@ -58,14 +52,14 @@ router.post('/', upload.single('file'), async (req, res) => {
 
         const fileUrl = cloudinaryResult.secure_url;
 
-        // ✅ Send Cloudinary URL response immediately
+        // Send Cloudinary URL response immediately
         res.json({
           success: true,
           message: "File uploaded successfully",
           downloadLink: fileUrl
         });
 
-        // ✅ Perform AI Analysis and Google Sheets Update in the Background
+        // Perform AI Analysis & Google Sheets Update in the background
         try {
           const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
           const prompt = `
@@ -84,11 +78,22 @@ router.post('/', upload.single('file'), async (req, res) => {
           ]);
           
           const analysisText = aiResponse.response.text();
+          console.log("AI Analysis Result:", analysisText);
 
-          // ✅ Save Data to Google Sheets
-          await doc.useServiceAccountAuth(auth);
-          await doc.loadInfo();
+          // Save data to Google Sheets
+          await doc.useServiceAccountAuth(SERVICE_ACCOUNT);
+          await doc.loadInfo(); // Loads document properties and worksheets
+
+          // Log sheet info for debugging
+          console.log("Spreadsheet title:", doc.title);
+          console.log("Available sheets:", doc.sheetsByIndex.map(sheet => sheet.title));
+
           const sheet = doc.sheetsByIndex[0];
+          if (!sheet) {
+            console.error("No sheet found in the spreadsheet.");
+            return;
+          }
+
           await sheet.addRow({
             Date: uploadDate,
             File_URL: fileUrl,
