@@ -17,36 +17,31 @@ router.post('/', async (req, res) => {
   const { imageBase64 } = req.body;
 
   if (!imageBase64) {
-    return res.status(400).json({ error: "Base64 image is missing" });
+    return res.status(400).json({ error: "Image data is missing" });
   }
 
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const prompt = `
+    Analyze the provided image and give the following details and
+    Give the only output as :
+    Name: Image name based on its content.
+    Artist: If unknown, write "Unknown".
+    AI Identification Score: Score out of 100 (High for AI-generated) and one sentence about how much sure that it is Ai generated.
+    Originality Score: Score out of 100 (High for original) and one sentence about how much sure that it is original image.
+    Conclusion: Tell in one sentence whether the provided image is AI-generated OR a real original image.
+    Description: A brief description of the image content.
+  `;
+
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-pro-vision" });
-
-    const prompt = `
-      Analyze the provided image and provide only the following structured output:
-      Name: (Image name based on content)
-      Artist: (If unknown, write "Unknown")
-      AI Identification Score: (Score out of 100 and confidence level)
-      Originality Score: (Score out of 100 and confidence level)
-      Conclusion: (One sentence stating if it's AI-generated or original)
-      Description: (Brief description of image content)
-    `;
-
-    const result = await model.generateContent({
-      contents: [
-        { role: "user", parts: [
-          { text: prompt },
-          { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
-        ]}
-      ]
-    });
-
-    const textResponse = result.candidates[0]?.content?.parts[0]?.text || "No response from AI";
-    res.json({ success: true, analysis: textResponse });
+    const result = await model.generateContent([
+      prompt,
+      { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
+    ]);
+    const text = result.response.text();
+    res.json({ analysis: text });
   } catch (error) {
-    console.error("❌ AI Analysis Error:", error);
-    res.status(500).json({ success: false, error: "Failed to get AI analysis" });
+    console.error("AI Analysis Error:", error);
+    res.status(500).json({ error: "Failed to get AI analysis" });
   }
 });
 
