@@ -14,15 +14,17 @@ async function imageToBase64(url) {
 }
 
 router.post('/', async (req, res) => {
-  const { imageBase64 } = req.body;
+  const { imageUrl } = req.body;
 
-  if (!imageBase64) {
-    return res.status(400).json({ error: "Base64 image is missing" });
+  if (!imageUrl) {
+    return res.status(400).json({ error: "Image URL is missing" });
   }
 
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const base64Image = await imageToBase64(imageUrl); // Convert image to Base64
 
+    // Use the updated model name
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     const prompt = `
       Analyze the provided image and provide only the following structured output:
       Name: (Image name based on content)
@@ -33,17 +35,12 @@ router.post('/', async (req, res) => {
       Description: (Brief description of image content)
     `;
 
-    const result = await model.generateContent({
-      contents: [
-        { role: "user", parts: [
-          { text: prompt },
-          { inlineData: { mimeType: 'image/jpeg', data: imageBase64 } }
-        ]}
-      ]
-    });
+    const result = await model.generateContent([
+      prompt,
+      { inlineData: { mimeType: 'image/jpeg', data: base64Image } } // Send Base64 data
+    ]);
 
-    const textResponse = result.candidates[0]?.content?.parts[0]?.text || "No response from AI";
-    res.json({ success: true, analysis: textResponse });
+    res.json({ success: true, analysis: result.response.text() });
   } catch (error) {
     console.error("❌ AI Analysis Error:", error);
     res.status(500).json({ success: false, error: "Failed to get AI analysis" });
