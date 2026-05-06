@@ -61,7 +61,7 @@ router.post('/', upload.single('file'), async (req, res) => {
 
         // Perform AI Analysis & Google Sheets Update in the background
         try {
-          const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+          const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
           const prompt = `
             Analyze the provided image and provide:
             - Name: Image name based on content.
