@@ -20,7 +20,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: "Image data is missing" });
   }
 
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
   const prompt = `
     Analyze the provided image and give the following details and
     Give the only output as :
